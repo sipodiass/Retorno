@@ -475,6 +475,12 @@ tbody tr:hover{background:rgba(63,208,224,.05);}
       <div class="chart-wrap tall"><canvas id="chart-loja-retornos"></canvas></div>
     </div>
 
+    <div class="chart-card" style="margin-bottom:20px;">
+      <h3 id="loja-top-motivo-title">Lojas mais afetadas pela ocorrência principal</h3>
+      <div class="desc" id="loja-top-motivo-desc">Ranqueado pela ocorrência mais frequente do período filtrado</div>
+      <div class="chart-wrap tall"><canvas id="chart-loja-top-motivo"></canvas></div>
+    </div>
+
     <div class="card" style="margin-bottom:12px;">
       <h3 style="margin:0 0 4px;font-size:14px;color:var(--text);">Principais motivos por Loja</h3>
       <div class="desc">Um cartão para cada loja, com os motivos mais frequentes do maior para o menor.</div>
@@ -1354,6 +1360,7 @@ function renderLojas(){
 
   renderChartLojaEvolucao(recs);
   renderChartLojaRetornos(byLoja);
+  renderChartLojaTopMotivo(recs);
   renderLojaMotivosGrid(recs);
 }
 
@@ -1402,6 +1409,66 @@ function renderChartLojaRetornos(byLoja){
     type:'bar',
     data:{ labels: entries.map(e=>e.name),
       datasets:[{ label:'Retornos', data: entries.map(e=>e.retornos),
+        backgroundColor: entries.map((_,i)=>CHART_PALETTE[i%CHART_PALETTE.length]), borderRadius:6 }]},
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        datalabels:{
+          display:true, anchor:'end', align:'end', offset:4,
+          color:'#eaeefb', font:{weight:'bold', size:12},
+          formatter:(v)=> v
+        }
+      },
+      layout:{padding:{right:36}},
+      scales:{
+        x:{ display:false, grid:{display:false} },
+        y:{ grid:{display:false}, ticks:{font:{weight:'bold', size:12}, color:'#eaeefb'} }
+      } }
+  });
+}
+
+function renderChartLojaTopMotivo(recs){
+  // 1) descobre a ocorrência (motivo) mais frequente no período filtrado
+  const motivoGeral = motivoCounts(recs);
+  const sortedMotivoGeral = Object.entries(motivoGeral).sort((a,b)=>b[1]-a[1]);
+  const titleEl = document.getElementById('loja-top-motivo-title');
+  const descEl = document.getElementById('loja-top-motivo-desc');
+  destroyChart('lojaTopMotivo');
+  const ctx = document.getElementById('chart-loja-top-motivo');
+
+  if(sortedMotivoGeral.length===0){
+    titleEl.textContent = 'Lojas mais afetadas pela ocorrência principal';
+    descEl.textContent = 'Sem dados no período filtrado.';
+    return;
+  }
+
+  const [topMotivoNome, topMotivoTotal] = sortedMotivoGeral[0];
+  titleEl.textContent = `Lojas mais afetadas por: ${topMotivoNome}`;
+  const totalGeral = sortedMotivoGeral.reduce((a,m)=>a+m[1],0);
+  const pct = totalGeral ? ((topMotivoTotal/totalGeral)*100).toFixed(1) : '0.0';
+  descEl.textContent = `Ocorrência nº1 do período (${topMotivoTotal} registro(s), ${pct}% do total) — veja quais lojas concentram esses casos`;
+
+  // 2) para essa ocorrência específica, agrupa por loja
+  const porLoja = {};
+  recs.forEach(rec=>{
+    if(!rec.loja) return;
+    (rec.motivos||[]).forEach(mv=>{
+      if(mv.motivo === topMotivoNome){
+        porLoja[rec.loja] = (porLoja[rec.loja]||0) + mv.qtd;
+      }
+    });
+  });
+  const entries = Object.entries(porLoja).sort((a,b)=>b[1]-a[1]);
+  if(!CHARTS_OK) return;
+  if(entries.length===0){
+    descEl.textContent += ' — nenhum desses registros tem loja informada.';
+    return;
+  }
+
+  charts.lojaTopMotivo = new Chart(ctx, {
+    type:'bar',
+    data:{ labels: entries.map(e=>e[0]),
+      datasets:[{ label:topMotivoNome, data: entries.map(e=>e[1]),
         backgroundColor: entries.map((_,i)=>CHART_PALETTE[i%CHART_PALETTE.length]), borderRadius:6 }]},
     options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{
