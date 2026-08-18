@@ -943,6 +943,15 @@ if(!CHARTS_OK){
 }
 function destroyChart(key){ if(charts[key]){ charts[key].destroy(); delete charts[key]; } }
 
+// Ajusta a altura do container do gráfico conforme a quantidade de categorias,
+// evitando que o Chart.js pule/oculte rótulos por falta de espaço.
+function setDynamicChartHeight(canvasId, count, perItem=34, min=300){
+  const canvas = document.getElementById(canvasId);
+  if(!canvas) return;
+  const wrap = canvas.parentElement;
+  wrap.style.height = Math.max(min, count*perItem) + 'px';
+}
+
 const CHART_PALETTE = ['#e0b64f','#3fd0e0','#4dd08a','#f2a154','#ef5a6f','#7fa3f4','#c084f5','#f4d179','#7fe6f0','#9adfba'];
 Chart.defaults.color = '#93a1cc';
 Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
@@ -1024,6 +1033,7 @@ function renderChartTransportadora(byTransp){
   destroyChart('transportadora');
   const ctx = document.getElementById('chart-transportadora');
   if(entries.length===0){ ctx.getContext('2d').clearRect(0,0,ctx.width,ctx.height); return; }
+  setDynamicChartHeight('chart-transportadora', entries.length);
   charts.transportadora = new Chart(ctx, {
     type:'bar',
     data:{ labels: entries.map(e=>e.name),
@@ -1041,7 +1051,7 @@ function renderChartTransportadora(byTransp){
       layout:{padding:{right:36}},
       scales:{
         x:{ display:false, grid:{display:false} },
-        y:{ grid:{display:false}, ticks:{font:{weight:'bold', size:12}, color:'#eaeefb'} }
+        y:{ grid:{display:false}, ticks:{autoSkip:false, font:{weight:'bold', size:12}, color:'#eaeefb'} }
       } }
   });
 }
@@ -1069,7 +1079,7 @@ function renderChartRegiao(byRegiao){
       layout:{padding:{top:24}},
       scales:{
         y:{ display:false, grid:{display:false} },
-        x:{ grid:{display:false}, ticks:{font:{weight:'bold', size:12}, color:'#eaeefb'} }
+        x:{ grid:{display:false}, ticks:{autoSkip:false, maxRotation:60, minRotation:0, font:{weight:'bold', size:11}, color:'#eaeefb'} }
       } }
   });
 }
@@ -1081,6 +1091,7 @@ function renderChartMotorista(byMotorista){
   destroyChart('motorista');
   const ctx = document.getElementById('chart-motorista');
   if(entries.length===0) return;
+  setDynamicChartHeight('chart-motorista', entries.length);
   const maxRet = Math.max(...entries.map(e=>e.retornos), 1);
   charts.motorista = new Chart(ctx, {
     type:'bar',
@@ -1099,7 +1110,7 @@ function renderChartMotorista(byMotorista){
       layout:{padding:{right:36}},
       scales:{
         x:{ display:false, grid:{display:false} },
-        y:{ grid:{display:false}, ticks:{font:{weight:'bold', size:12}, color:'#eaeefb'} }
+        y:{ grid:{display:false}, ticks:{autoSkip:false, font:{weight:'bold', size:12}, color:'#eaeefb'} }
       } }
   });
 }
@@ -1233,7 +1244,7 @@ function renderMotivosView(){
             layout:{padding:{right:28}},
             scales:{
               x:{ display:false, grid:{display:false} },
-              y:{ grid:{display:false}, ticks:{font:{size:11.5}, color:'#eaeefb'} }
+              y:{ grid:{display:false}, ticks:{autoSkip:false, font:{size:11.5}, color:'#eaeefb'} }
             } }
         });
         motivosCruzCharts.push(chart);
@@ -1405,6 +1416,7 @@ function renderChartLojaRetornos(byLoja){
   destroyChart('lojaRetornos');
   const ctx = document.getElementById('chart-loja-retornos');
   if(entries.length===0) return;
+  setDynamicChartHeight('chart-loja-retornos', entries.length);
   charts.lojaRetornos = new Chart(ctx, {
     type:'bar',
     data:{ labels: entries.map(e=>e.name),
@@ -1422,7 +1434,7 @@ function renderChartLojaRetornos(byLoja){
       layout:{padding:{right:36}},
       scales:{
         x:{ display:false, grid:{display:false} },
-        y:{ grid:{display:false}, ticks:{font:{weight:'bold', size:12}, color:'#eaeefb'} }
+        y:{ grid:{display:false}, ticks:{autoSkip:false, font:{weight:'bold', size:12}, color:'#eaeefb'} }
       } }
   });
 }
@@ -1464,6 +1476,7 @@ function renderChartLojaTopMotivo(recs){
     descEl.textContent += ' — nenhum desses registros tem loja informada.';
     return;
   }
+  setDynamicChartHeight('chart-loja-top-motivo', entries.length);
 
   charts.lojaTopMotivo = new Chart(ctx, {
     type:'bar',
@@ -1482,7 +1495,7 @@ function renderChartLojaTopMotivo(recs){
       layout:{padding:{right:36}},
       scales:{
         x:{ display:false, grid:{display:false} },
-        y:{ grid:{display:false}, ticks:{font:{weight:'bold', size:12}, color:'#eaeefb'} }
+        y:{ grid:{display:false}, ticks:{autoSkip:false, font:{weight:'bold', size:12}, color:'#eaeefb'} }
       } }
   });
 }
@@ -1543,7 +1556,7 @@ function renderLojaMotivosGrid(recs){
           layout:{padding:{right:28}},
           scales:{
             x:{ display:false, grid:{display:false} },
-            y:{ grid:{display:false}, ticks:{font:{size:11.5}, color:'#eaeefb'} }
+            y:{ grid:{display:false}, ticks:{autoSkip:false, font:{size:11.5}, color:'#eaeefb'} }
           } }
       });
       lojaMotivosCharts.push(chart);
