@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#0f0f0f">
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('./sw.js');
-  });
-}
-</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIPOLATTI · Retorno Logístico</title>
@@ -350,25 +341,21 @@ tbody tr:hover{background:rgba(63,208,224,.05);}
         </div>
         <div class="field">
           <div class="label-row"><label>Loja / Venda</label><button type="button" class="link-manage" data-field="loja">gerenciar</button></div>
-          <input list="dl-lojas" id="f-loja" placeholder="Ex: Loja Centro">
-          <datalist id="dl-lojas"></datalist>
+          <select id="f-loja"></select>
         </div>
       </div>
       <div class="row">
         <div class="field">
           <div class="label-row"><label>Transportadora</label><button type="button" class="link-manage" data-field="transportadora">gerenciar</button></div>
-          <input list="dl-transportadoras" id="f-transportadora" placeholder="Ex: Transp. Vitória Log">
-          <datalist id="dl-transportadoras"></datalist>
+          <select id="f-transportadora"></select>
         </div>
         <div class="field">
           <div class="label-row"><label>Região / Praça</label><button type="button" class="link-manage" data-field="regiao">gerenciar</button></div>
-          <input list="dl-regioes" id="f-regiao" placeholder="Ex: Vitória - ES">
-          <datalist id="dl-regioes"></datalist>
+          <select id="f-regiao"></select>
         </div>
         <div class="field">
           <div class="label-row"><label>Motorista</label><button type="button" class="link-manage" data-field="motorista">gerenciar</button></div>
-          <input list="dl-motoristas" id="f-motorista" placeholder="Nome do motorista">
-          <datalist id="dl-motoristas"></datalist>
+          <select id="f-motorista"></select>
         </div>
       </div>
 
@@ -672,6 +659,9 @@ tbody tr:hover{background:rgba(63,208,224,.05);}
         <button class="btn btn-secondary" id="btn-export-csv">Exportar CSV</button>
       </div>
       <div class="field" style="flex:0;">
+        <button class="btn btn-secondary" id="btn-export-xlsx">Exportar Excel</button>
+      </div>
+      <div class="field" style="flex:0;">
         <button class="btn btn-secondary" id="btn-export-backup">Backup (JSON)</button>
       </div>
       <div class="field" style="flex:0;">
@@ -900,16 +890,55 @@ function fmtDateBR(iso){
 }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 
-function refreshDatalists(){
-  const dlT = document.getElementById('dl-transportadoras');
-  const dlM = document.getElementById('dl-motoristas');
-  const dlR = document.getElementById('dl-regioes');
-  const dlL = document.getElementById('dl-lojas');
-  dlT.innerHTML = transportadoras.map(t=>`<option value="${escapeHtml(t)}">`).join('');
-  dlM.innerHTML = motoristas.map(m=>`<option value="${escapeHtml(m)}">`).join('');
-  dlR.innerHTML = regioes.map(r=>`<option value="${escapeHtml(r)}">`).join('');
-  dlL.innerHTML = lojas.map(l=>`<option value="${escapeHtml(l)}">`).join('');
+function buildFieldSelectOptions(selectId, field, addLabel, selectedValue){
+  const sel = document.getElementById(selectId);
+  if(!sel) return;
+  const current = selectedValue !== undefined ? selectedValue : sel.value;
+  const arr = LIST_DEFS[field].get();
+  const sorted = arr.slice().sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  sel.innerHTML = `<option value="">Selecione...</option>` +
+    sorted.map(v=>`<option value="${escapeHtml(v)}" ${v===current?'selected':''}>${escapeHtml(v)}</option>`).join('') +
+    `<option value="__add_new__">${addLabel}</option>`;
 }
+
+function refreshDatalists(){
+  buildFieldSelectOptions('f-transportadora', 'transportadora', '+ Adicionar nova transportadora');
+  buildFieldSelectOptions('f-motorista', 'motorista', '+ Adicionar novo motorista');
+  buildFieldSelectOptions('f-regiao', 'regiao', '+ Adicionar nova região');
+  buildFieldSelectOptions('f-loja', 'loja', '+ Adicionar nova loja');
+}
+
+function setupAddNewSelect(selectId, field, promptTitle, promptPlaceholder){
+  document.getElementById(selectId).addEventListener('change', function(){
+    if(this.value === '__add_new__'){
+      this.value = '';
+      showPromptModal({
+        title: promptTitle,
+        placeholder: promptPlaceholder,
+        onConfirm:(val)=>{
+          val = (val||'').trim();
+          if(!val) return;
+          const def = LIST_DEFS[field];
+          const arr = def.get();
+          if(!arr.includes(val)){
+            const newArr = arr.slice();
+            newArr.push(val);
+            def.set(newArr);
+            saveArr(def.lsKey, newArr);
+          }
+          refreshDatalists();
+          document.getElementById(selectId).value = val;
+          if(typeof driveAutoSave === 'function') driveAutoSave();
+          toast('Adicionado à lista!');
+        }
+      });
+    }
+  });
+}
+setupAddNewSelect('f-transportadora','transportadora','Adicionar nova transportadora','Ex: Transp. Vitória Log');
+setupAddNewSelect('f-motorista','motorista','Adicionar novo motorista','Nome do motorista');
+setupAddNewSelect('f-regiao','regiao','Adicionar nova região','Ex: Vitória - ES');
+setupAddNewSelect('f-loja','loja','Adicionar nova loja','Ex: Loja Centro');
 function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -2041,10 +2070,10 @@ function editarRegistro(id){
   setLancamentoTipo(rec.tipo==='box' ? 'box' : 'retorno');
   document.getElementById('f-data').value = rec.data;
   document.getElementById('f-pedido').value = rec.pedido || '';
-  document.getElementById('f-transportadora').value = rec.transportadora;
-  document.getElementById('f-motorista').value = rec.motorista;
-  document.getElementById('f-regiao').value = rec.regiao;
-  document.getElementById('f-loja').value = rec.loja || '';
+  buildFieldSelectOptions('f-transportadora', 'transportadora', '+ Adicionar nova transportadora', rec.transportadora);
+  buildFieldSelectOptions('f-motorista', 'motorista', '+ Adicionar novo motorista', rec.motorista);
+  buildFieldSelectOptions('f-regiao', 'regiao', '+ Adicionar nova região', rec.regiao);
+  buildFieldSelectOptions('f-loja', 'loja', '+ Adicionar nova loja', rec.loja || '');
   document.getElementById('f-box').value = rec.box || '';
   document.getElementById('f-obs').value = rec.obs || '';
   document.getElementById('f-anexo').value = '';
@@ -2101,22 +2130,54 @@ function limparTudo(){
 
 document.getElementById('btn-limpar-tudo').addEventListener('click', limparTudo);
 
+function buildExportRows(){
+  return getActiveRecords().map(r=>{
+    const motivo = (r.motivos && r.motivos[0]) ? r.motivos[0].motivo : '';
+    return [
+      r.data,
+      r.tipo==='box' ? 'Ficou no Box' : 'Retorno',
+      r.pedido || '',
+      r.loja || '',
+      r.transportadora,
+      r.regiao,
+      r.motorista,
+      r.box || '',
+      motivo,
+      (r.obs || '').replace(/\n/g,' ')
+    ];
+  });
+}
+
 document.getElementById('btn-export-csv').addEventListener('click', ()=>{
-  const ativos = getActiveRecords();
-  if(ativos.length===0){ toast('Nenhum registro para exportar.', true); return; }
-  const header = ['Data','Tipo','Nº Pedido','Transportadora','Motorista','Regiao','Loja','Box Carregamento','Retornos','Motivos','Observacoes'];
-  const rows = ativos.map(r=>[
-    r.data, r.tipo==='box'?'Ficou no Box':'Retorno', r.pedido||'', r.transportadora, r.motorista, r.regiao, r.loja||'', r.box||'', r.retornos,
-    (r.motivos||[]).map(m=>`${m.motivo}:${m.qtd}`).join(' | '),
-    (r.obs||'').replace(/\n/g,' ')
-  ]);
-  const csv = [header, ...rows].map(row=>row.map(cell=>`"${String(cell).replace(/"/g,'""')}"`).join(';')).join('\n');
+  const rows = buildExportRows();
+  if(rows.length===0){ toast('Nenhum registro para exportar.', true); return; }
+  const csv = [TEMPLATE_HEADERS, ...rows].map(row=>row.map(cell=>`"${String(cell).replace(/"/g,'""')}"`).join(';')).join('\n');
   const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = `retorno_logistico_${todayISO()}.csv`;
   a.click(); URL.revokeObjectURL(url);
   toast('CSV exportado com sucesso!');
+});
+
+document.getElementById('btn-export-xlsx').addEventListener('click', ()=>{
+  const rows = buildExportRows();
+  if(rows.length===0){ toast('Nenhum registro para exportar.', true); return; }
+  if(typeof XLSX === 'undefined'){
+    toast('Não foi possível carregar o suporte a Excel agora (sem internet no momento). Use a exportação em CSV.', true);
+    return;
+  }
+  try{
+    const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS, ...rows]);
+    ws['!cols'] = TEMPLATE_HEADERS.map(()=>({wch:20}));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Registros');
+    XLSX.writeFile(wb, `retorno_logistico_${todayISO()}.xlsx`);
+    toast('Excel exportado com sucesso!');
+  }catch(err){
+    console.error(err);
+    toast('Não foi possível gerar o arquivo Excel.', true);
+  }
 });
 
 document.getElementById('btn-export-backup').addEventListener('click', ()=>{
