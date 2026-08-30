@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#0f0f0f">
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('./sw.js');
-  });
-}
-</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIPOLATTI · Retorno Logístico</title>
@@ -2508,44 +2499,127 @@ const LIST_DEFS = {
   motivo: {label:'Motivos', lsKey: LS_KEYS.motivos, get:()=>motivosCat, set:(a)=>{motivosCat=a;}}
 };
 
+function renameListItem(field, oldValue, newValue){
+  const def = LIST_DEFS[field];
+  const arr = def.get();
+  const idx = arr.indexOf(oldValue);
+  if(idx===-1) return 0;
+  const newArr = arr.slice();
+  if(newArr.includes(newValue)){
+    newArr.splice(idx,1); // já existe um item igual ao novo valor: só remove o antigo (mescla)
+  } else {
+    newArr[idx] = newValue;
+  }
+  def.set(newArr);
+  saveArr(def.lsKey, newArr);
+
+  let updated = 0;
+  records.forEach(r=>{
+    if(field==='motivo'){
+      if(Array.isArray(r.motivos)){
+        r.motivos.forEach(m=>{ if(m.motivo===oldValue){ m.motivo=newValue; updated++; } });
+      }
+    } else if(r[field]===oldValue){
+      r[field]=newValue; updated++;
+    }
+    if(updated) r.updatedAt = Date.now();
+  });
+  if(updated>0) persistAll();
+  refreshDatalists();
+  if(field==='motivo') buildMotivoUnicoOptions(document.getElementById('f-motivo-unico').value);
+  if(typeof driveAutoSave === 'function') driveAutoSave();
+  if(typeof refreshCurrentView === 'function') refreshCurrentView();
+  return updated;
+}
+
 function showManageListModal(field){
   const def = LIST_DEFS[field];
   if(!def) return;
   document.getElementById('modal-title').textContent = 'Gerenciar ' + def.label;
   const msgEl = document.getElementById('modal-msg');
+  let editingIdx = null;
 
   function renderList(){
     const arr = def.get();
     msgEl.innerHTML = `
-      <div style="max-height:280px;overflow-y:auto;margin-bottom:14px;">
-        ${arr.length ? arr.map((item,i)=>`
+      <div style="max-height:320px;overflow-y:auto;margin-bottom:14px;">
+        ${arr.length ? arr.map((item,i)=> i===editingIdx ? `
+          <div class="manage-item" style="gap:8px;flex-wrap:wrap;">
+            <input type="text" id="manage-edit-input" value="${escapeHtml(item)}" style="flex:1;min-width:160px;">
+            <div style="display:flex;gap:6px;flex-shrink:0;margin-left:auto;">
+              <button type="button" class="btn btn-primary btn-sm" data-save="${i}">Salvar</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-cancel="1">Cancelar</button>
+            </div>
+          </div>
+        ` : `
           <div class="manage-item">
             <span>${escapeHtml(item)}</span>
-            <button type="button" class="btn btn-danger btn-sm" data-del="${i}">Excluir</button>
-          </div>`).join('') : '<div style="color:var(--text-dim);font-size:13px;padding:10px 0;">Nenhum item cadastrado ainda.</div>'}
+            <div style="display:flex;gap:6px;flex-shrink:0;">
+              <button type="button" class="btn btn-secondary btn-sm" data-edit="${i}">Editar</button>
+              <button type="button" class="btn btn-danger btn-sm" data-del="${i}">Excluir</button>
+            </div>
+          </div>
+        `).join('') : '<div style="color:var(--text-dim);font-size:13px;padding:10px 0;">Nenhum item cadastrado ainda.</div>'}
       </div>
-      <div class="hint">Excluir aqui só remove da lista de sugestões — não apaga lançamentos já salvos com esse valor.</div>
+      <div class="hint">Excluir só remove da lista de sugestões — não apaga lançamentos já salvos. Editar também atualiza automaticamente os lançamentos já salvos com o valor antigo.</div>
     `;
+
     msgEl.querySelectorAll('[data-del]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const idx = parseInt(btn.dataset.del, 10);
         const arrNow = def.get();
         const itemName = arrNow[idx];
-        confirmAction(`Remover "${itemName}" da lista de ${def.label.toLowerCase()}?`, ()=>{
-          const newArr = arrNow.slice();
-          newArr.splice(idx,1);
-          def.set(newArr);
-          saveArr(def.lsKey, newArr);
-          if(typeof driveAutoSave === 'function') driveAutoSave();
-          refreshDatalists();
-          if(field==='motivo'){
-            buildMotivoUnicoOptions(document.getElementById('f-motivo-unico').value);
-          }
-          toast('Item removido da lista.');
-          showManageListModal(field);
-        });
+        const newArr = arrNow.slice();
+        newArr.splice(idx,1);
+        def.set(newArr);
+        saveArr(def.lsKey, newArr);
+        if(typeof driveAutoSave === 'function') driveAutoSave();
+        refreshDatalists();
+        if(field==='motivo'){
+          buildMotivoUnicoOptions(document.getElementById('f-motivo-unico').value);
+        }
+        toast(`"${itemName}" removido da lista.`);
+        editingIdx = null;
+        renderList();
       });
     });
+
+    msgEl.querySelectorAll('[data-edit]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        editingIdx = parseInt(btn.dataset.edit, 10);
+        renderList();
+        const input = document.getElementById('manage-edit-input');
+        if(input){ input.focus(); input.select(); }
+      });
+    });
+
+    msgEl.querySelectorAll('[data-cancel]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ editingIdx = null; renderList(); });
+    });
+
+    msgEl.querySelectorAll('[data-save]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const idx = parseInt(btn.dataset.save, 10);
+        const arrNow = def.get();
+        const oldValue = arrNow[idx];
+        const input = document.getElementById('manage-edit-input');
+        const newValue = input ? input.value.trim() : '';
+        if(!newValue){ toast('Digite um valor válido.', true); return; }
+        if(newValue===oldValue){ editingIdx=null; renderList(); return; }
+        const updated = renameListItem(field, oldValue, newValue);
+        toast(`Atualizado para "${newValue}"${updated ? ` — ${updated} lançamento(s) atualizado(s)` : ''}.`);
+        editingIdx = null;
+        renderList();
+      });
+    });
+
+    const input = document.getElementById('manage-edit-input');
+    if(input){
+      input.addEventListener('keydown', (e)=>{
+        if(e.key==='Enter'){ e.preventDefault(); const b=msgEl.querySelector('[data-save]'); if(b) b.click(); }
+        if(e.key==='Escape'){ editingIdx=null; renderList(); }
+      });
+    }
   }
   renderList();
 
