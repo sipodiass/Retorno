@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#0f0f0f">
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('./sw.js');
-  });
-}
-</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIPOLATTI · Retorno Logístico</title>
@@ -2211,7 +2202,7 @@ function initGoogleDrive(){
 
   document.getElementById('btn-google-connect').addEventListener('click', ()=>{
     if(!gisTokenClient){ toast('Google ainda não carregou. Tente novamente em instantes.', true); return; }
-    gisTokenClient.requestAccessToken({prompt: driveAccessToken ? '' : 'consent'});
+    gisTokenClient.requestAccessToken({prompt: driveAccessToken ? '' : 'select_account consent'});
   });
   document.getElementById('btn-drive-sync-now').addEventListener('click', ()=>{
     if(!driveAccessToken){ toast('Conecte-se ao Google Drive primeiro.', true); return; }
