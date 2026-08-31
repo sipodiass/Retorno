@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#0f0f0f">
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('./sw.js');
-  });
-}
-</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIPOLATTI · Retorno Logístico</title>
@@ -892,10 +883,12 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
    HELPERS
 ============================================================ */
 function fmtPct(n){ return (isFinite(n)?n:0).toFixed(1).replace('.',',') + '%'; }
+const PT_MONTHS_ABBR = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 function fmtDateBR(iso){
   if(!iso) return '-';
   const [y,m,d] = iso.split('-');
-  return `${d}/${m}/${y}`;
+  const mi = parseInt(m,10)-1;
+  return `${d}-${PT_MONTHS_ABBR[mi] || m}`;
 }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 
@@ -1083,12 +1076,29 @@ document.getElementById('btn-salvar-registro').addEventListener('click', ()=>{
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
-  records.push(rec);
 
-  persistAll();
-  refreshDatalists();
-  toast('Lançamento adicionado com sucesso!');
-  resetForm();
+  function finalizeSaveNovoLancamento(){
+    records.push(rec);
+    persistAll();
+    refreshDatalists();
+    toast('Lançamento adicionado com sucesso!');
+    resetForm();
+  }
+
+  const dupKey = recordDedupeKey(rec);
+  const isDuplicate = getActiveRecords().some(r => recordDedupeKey(r) === dupKey);
+  if(isDuplicate){
+    const camposIguais = tipo==='box'
+      ? 'data, transportadora, motorista, região, motivo e box'
+      : 'data, transportadora, motorista, região e motivo';
+    confirmAction(
+      `Já existe um lançamento igual a este (mesma ${camposIguais}) em ${fmtDateBR(data)}. Deseja salvar mesmo assim?`,
+      finalizeSaveNovoLancamento,
+      'Lançamento duplicado?'
+    );
+  } else {
+    finalizeSaveNovoLancamento();
+  }
 });
 
 /* ============================================================
@@ -2769,6 +2779,8 @@ function mapHeaders(headerRow){
   return map;
 }
 
+const PT_MONTHS = {jan:1,fev:2,mar:3,abr:4,mai:5,jun:6,jul:7,ago:8,set:9,out:10,nov:11,dez:12};
+
 function parseDateFlexible(str){
   if(!str) return '';
   str = String(str).trim();
@@ -2778,6 +2790,18 @@ function parseDateFlexible(str){
     let [_, d, mo, y] = m;
     if(y.length===2) y = '20'+y;
     return `${y.padStart(4,'0')}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  // Formato dia-mês abreviado em português (ex: "31-ago", "31/ago/2026", "5 set 26")
+  const m2 = str.match(/^(\d{1,2})[\/\-\s]([a-zçãéêô]{3,})\.?(?:[\/\-\s](\d{2,4}))?$/i);
+  if(m2){
+    const day = parseInt(m2[1], 10);
+    const monKey = normalizeStr(m2[2]).slice(0,3);
+    const month = PT_MONTHS[monKey];
+    if(month && day>=1 && day<=31){
+      let year = m2[3] ? parseInt(m2[3],10) : new Date().getFullYear();
+      if(m2[3] && m2[3].length===2) year = 2000+year;
+      return `${String(year).padStart(4,'0')}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    }
   }
   if(/^\d+(\.\d+)?$/.test(str)){
     const excelEpoch = Date.UTC(1899,11,30);
@@ -2812,6 +2836,15 @@ function parseCSVText(text){
   return rows.filter(r=> r.some(c=>String(c).trim()!==''));
 }
 
+function recordDedupeKey(rec){
+  const pedido = (rec.pedido||'').trim().toLowerCase();
+  const motivo = (rec.motivos && rec.motivos[0]) ? rec.motivos[0].motivo : '';
+  return [
+    rec.data, rec.tipo, pedido, rec.transportadora, rec.motorista, rec.regiao,
+    rec.loja||'', rec.box||'', motivo
+  ].join('|').toLowerCase();
+}
+
 function importRowsAsRecords(rows){
   if(!rows || rows.length<2){ toast('A planilha está vazia ou não tem linhas de dados.', true); return; }
   const map = mapHeaders(rows[0]);
@@ -2819,7 +2852,8 @@ function importRowsAsRecords(rows){
     toast('Não reconheci as colunas da planilha. Baixe e use o modelo fornecido.', true);
     return;
   }
-  let added=0, skipped=0;
+  const existingKeys = new Set(getActiveRecords().map(recordDedupeKey));
+  let added=0, skipped=0, duplicated=0;
   for(let i=1;i<rows.length;i++){
     const r = rows[i];
     const get = (f)=> map[f]!==undefined ? String(r[map[f]]==null?'':r[map[f]]).trim() : '';
@@ -2836,6 +2870,10 @@ function importRowsAsRecords(rows){
     const motivo = get('motivo') || 'Não informado';
     const obs = get('obs');
     const pedido = get('pedido');
+
+    const candidateKey = recordDedupeKey({data:dataISO, pedido, transportadora, motorista, regiao, loja, box, tipo, motivos:[{motivo}]});
+    if(existingKeys.has(candidateKey)){ duplicated++; continue; }
+    existingKeys.add(candidateKey);
 
     if(!transportadoras.includes(transportadora)) transportadoras.push(transportadora);
     if(!motoristas.includes(motorista)) motoristas.push(motorista);
@@ -2855,7 +2893,10 @@ function importRowsAsRecords(rows){
   refreshDatalists();
   buildMotivoUnicoOptions(document.getElementById('f-motivo-unico').value);
   renderRegistros();
-  toast(`${added} lançamento(s) importado(s) com sucesso${skipped? ` — ${skipped} linha(s) ignorada(s) por falta de dados obrigatórios.`:'.'}`);
+  const notas = [];
+  if(skipped) notas.push(`${skipped} linha(s) ignorada(s) por falta de dados obrigatórios`);
+  if(duplicated) notas.push(`${duplicated} linha(s) já existente(s) no app (não duplicadas)`);
+  toast(`${added} lançamento(s) importado(s) com sucesso${notas.length ? ` — ${notas.join(' — ')}.` : '.'}`);
 }
 
 function downloadBlob(blob, filename){
@@ -2911,8 +2952,15 @@ document.getElementById('input-import-planilha').addEventListener('change', func
     reader.onload = ()=>{
       try{
         const wb = XLSX.read(reader.result, {type:'array'});
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:''});
+        let sheetName = wb.SheetNames.find(n => normalizeStr(n) === 'info');
+        if(!sheetName){
+          sheetName = wb.SheetNames.find(n => !normalizeStr(n).includes('validador'));
+        }
+        if(!sheetName){
+          sheetName = wb.SheetNames[0];
+        }
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
         importRowsAsRecords(rows);
       }catch(err){
         console.error(err);
@@ -2946,20 +2994,66 @@ function computePreviousPeriodRange(de, ate){
   return { de: prevStart.toISOString().slice(0,10), ate: prevEnd.toISOString().slice(0,10) };
 }
 
-function topEntries(recs, field, limit){
+function topLabelFor(recs, field){
   const map = aggregateBy(recs, r=>r[field] || '—');
-  const entries = Object.entries(map).map(([name,v])=>({label:name, value:v.retornos})).sort((a,b)=>b.value-a.value);
+  let best=null, bestVal=-1;
+  Object.entries(map).forEach(([k,v])=>{ if(v.retornos>bestVal){ bestVal=v.retornos; best=k; } });
+  return bestVal>0 ? best : null;
+}
+function topMotivoFor(recs){
+  const counts = motivoCounts(recs);
+  let best=null, bestVal=-1;
+  Object.entries(counts).forEach(([k,v])=>{ if(v>bestVal){ bestVal=v; best=k; } });
+  return bestVal>0 ? best : null;
+}
+function topEntries(recs, field, limit, subFields){
+  const groups = {};
+  recs.forEach(r=>{
+    const key = r[field] || '—';
+    (groups[key] = groups[key] || []).push(r);
+  });
+  let entries = Object.entries(groups).map(([label, list])=>{
+    const entry = {label, value:list.length};
+    if(subFields && subFields.includes('regiao')) entry.subRegiao = topLabelFor(list, 'regiao');
+    if(subFields && subFields.includes('motivo')) entry.subMotivo = topMotivoFor(list);
+    return entry;
+  }).sort((a,b)=>b.value-a.value);
   return limit ? entries.slice(0, limit) : entries;
 }
-function topMotivos(recs, limit){
-  const counts = motivoCounts(recs);
-  const entries = Object.entries(counts).map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value);
+function topMotivos(recs, limit, withSub){
+  const groups = {};
+  recs.forEach(r=>{
+    const m = (r.motivos && r.motivos[0]) ? r.motivos[0].motivo : null;
+    if(!m) return;
+    (groups[m] = groups[m] || []).push(r);
+  });
+  let entries = Object.entries(groups).map(([label, list])=>{
+    const entry = {label, value:list.length};
+    if(withSub){
+      entry.subLoja = topLabelFor(list.filter(r=>r.loja), 'loja');
+      entry.subRegiao = topLabelFor(list, 'regiao');
+    }
+    return entry;
+  }).sort((a,b)=>b.value-a.value);
   return limit ? entries.slice(0, limit) : entries;
 }
 function buildEvolutionSeries(recs){
   const byDate = {};
-  recs.forEach(r=>{ byDate[r.data] = (byDate[r.data]||0)+1; });
+  recs.forEach(r=>{
+    if(!r.data || !/^\d{4}-\d{2}-\d{2}$/.test(r.data)) return;
+    byDate[r.data] = (byDate[r.data]||0)+1;
+  });
   return Object.keys(byDate).sort().map(d=>({date:d, value:byDate[d]}));
+}
+function mondayOfWeek(d){
+  const day = (d.getDay()+6)%7; // 0=segunda ... 6=domingo
+  const monday = new Date(d);
+  monday.setDate(d.getDate()-day);
+  monday.setHours(0,0,0,0);
+  return monday;
+}
+function fmtDM(d){
+  return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');
 }
 function bucketEvolution(series){
   if(series.length===0) return [];
@@ -2967,12 +3061,14 @@ function bucketEvolution(series){
   const buckets = {};
   series.forEach(s=>{
     const d = new Date(s.date+'T00:00:00');
-    const onejan = new Date(d.getFullYear(),0,1);
-    const week = Math.ceil((((d-onejan)/86400000)+onejan.getDay()+1)/7);
-    const key = `${d.getFullYear()}-S${String(week).padStart(2,'0')}`;
-    buckets[key] = (buckets[key]||0)+s.value;
+    if(isNaN(d.getTime())) return;
+    const monday = mondayOfWeek(d);
+    const sunday = new Date(monday); sunday.setDate(monday.getDate()+6);
+    const sortKey = monday.toISOString().slice(0,10);
+    if(!buckets[sortKey]) buckets[sortKey] = {label: `${fmtDM(monday)} a ${fmtDM(sunday)}`, value:0};
+    buckets[sortKey].value += s.value;
   });
-  return Object.entries(buckets).sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>({label:k, value:v}));
+  return Object.entries(buckets).sort((a,b)=>a[0].localeCompare(b[0])).map(([,b])=>({label:b.label, value:b.value}));
 }
 
 function generateInsights(d){
@@ -3025,17 +3121,17 @@ function buildReportData(de, ate){
   const mediaRetorno = dias ? totalRetorno/dias : 0;
   const mediaBox = dias ? totalBox/dias : 0;
 
-  const rankTranspRetorno = topEntries(retorno,'transportadora',5);
-  const rankMotoristaRetorno = topEntries(retorno,'motorista',5);
-  const rankRegiaoRetorno = topEntries(retorno,'regiao',5);
-  const rankLojaRetorno = topEntries(retorno.filter(r=>r.loja),'loja',5);
+  const rankTranspRetorno = topEntries(retorno,'transportadora',5,['regiao','motivo']);
+  const rankMotoristaRetorno = topEntries(retorno,'motorista',5,['regiao','motivo']);
+  const rankRegiaoRetorno = topEntries(retorno,'regiao',5,['motivo']);
+  const rankLojaRetorno = topEntries(retorno.filter(r=>r.loja),'loja',5,['motivo']);
 
-  const rankTranspBox = topEntries(box,'transportadora',5);
-  const rankMotoristaBox = topEntries(box,'motorista',5);
-  const rankLojaBox = topEntries(box.filter(r=>r.loja),'loja',5);
+  const rankTranspBox = topEntries(box,'transportadora',5,['regiao','motivo']);
+  const rankMotoristaBox = topEntries(box,'motorista',5,['regiao','motivo']);
+  const rankLojaBox = topEntries(box.filter(r=>r.loja),'loja',5,['motivo']);
 
-  const motivosRetorno = topMotivos(retorno,5);
-  const motivosBox = topMotivos(box,5);
+  const motivosRetorno = topMotivos(retorno,5,true);
+  const motivosBox = topMotivos(box,5,true);
 
   const evolRetorno = bucketEvolution(buildEvolutionSeries(retorno));
 
@@ -3058,15 +3154,19 @@ function buildReportData(de, ate){
   return data;
 }
 
-function reportBarsHTML(entries){
+function reportBarsHTML(entries, subLines){
   if(!entries || !entries.length) return `<div style="color:var(--text-dim);font-size:13px;">Sem dados no período.</div>`;
   const max = Math.max(...entries.map(e=>e.value), 1);
-  return entries.map(e=>`
+  return entries.map(e=>{
+    const subs = subLines ? subLines(e).filter(Boolean) : [];
+    const subHtml = subs.length ? `<div style="font-size:11.5px;color:var(--text-dim);margin-top:4px;">${subs.map(escapeHtml).join(' &nbsp;·&nbsp; ')}</div>` : '';
+    return `
     <div class="report-bar-row">
       <div class="rb-top"><span>${escapeHtml(e.label)}</span><b>${e.value}</b></div>
       <div class="report-bar-track"><div class="report-bar-fill" style="width:${Math.max(4,(e.value/max)*100)}%;"></div></div>
+      ${subHtml}
     </div>
-  `).join('');
+  `;}).join('');
 }
 
 function getReportPeriodo(){
@@ -3106,10 +3206,10 @@ function renderReportPreview(){
 
   el.innerHTML = `
     <div class="report-page" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;min-height:420px;">
-      <div class="report-kicker">SIPOLATTI · PRESTAÇÃO DE CONTAS</div>
-      <div style="font-size:30px;font-weight:900;color:var(--text);margin:8px 0 6px;">Relatório Executivo</div>
-      <div style="font-size:16px;color:var(--cyan-2);font-weight:700;">Retorno Logístico</div>
-      <div style="margin-top:24px;font-size:14px;color:var(--text-dim);">Período: ${escapeHtml(periodoLabel(de,ate))}</div>
+      <div style="font-size:16px;font-weight:900;color:var(--gold-2);letter-spacing:4px;text-transform:uppercase;">SIPOLATTI</div>
+      <div style="font-size:14px;font-weight:700;color:var(--cyan-2);letter-spacing:2.5px;text-transform:uppercase;margin:4px 0 26px;">Prestação de Contas</div>
+      <div style="font-size:34px;font-weight:900;color:var(--text);letter-spacing:.3px;">Retorno Logístico</div>
+      <div style="margin-top:26px;font-size:14px;color:var(--text-dim);">Período: ${escapeHtml(periodoLabel(de,ate))}</div>
       <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">Gerado em ${escapeHtml(dataGeracao)}</div>
     </div>
 
@@ -3136,33 +3236,33 @@ function renderReportPreview(){
       <div class="report-kicker">PONTOS DE ATENÇÃO — RETORNO</div>
       <div class="report-title">Ranking do período</div>
       <div class="grid grid-2">
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspRetorno)}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaRetorno)}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Região</h4>${reportBarsHTML(data.rankRegiaoRetorno)}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaRetorno)}</div>
-      </div>
-    </div>
-
-    <div class="report-page">
-      <div class="report-kicker">PONTOS DE ATENÇÃO — FICOU NO BOX</div>
-      <div class="report-title">Ranking do período</div>
-      <div class="grid grid-2">
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspBox)}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaBox)}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaBox)}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspRetorno, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaRetorno, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Região</h4>${reportBarsHTML(data.rankRegiaoRetorno, e=>[e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaRetorno, e=>[e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
       </div>
     </div>
 
     <div class="report-page">
       <div class="report-kicker">MOTIVOS — RETORNO</div>
       <div class="report-title">Principais ocorrências</div>
-      ${reportBarsHTML(data.motivosRetorno)}
+      ${reportBarsHTML(data.motivosRetorno, e=>[e.subLoja?`Loja: ${e.subLoja}`:null, e.subRegiao?`Região: ${e.subRegiao}`:null])}
+    </div>
+
+    <div class="report-page">
+      <div class="report-kicker">PONTOS DE ATENÇÃO — FICOU NO BOX</div>
+      <div class="report-title">Ranking do período</div>
+      <div class="grid grid-2">
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspBox, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaBox, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaBox, e=>[e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+      </div>
     </div>
 
     <div class="report-page">
       <div class="report-kicker">MOTIVOS — FICOU NO BOX</div>
       <div class="report-title">Principais ocorrências</div>
-      ${reportBarsHTML(data.motivosBox)}
+      ${reportBarsHTML(data.motivosBox, e=>[e.subLoja?`Loja: ${e.subLoja}`:null, e.subRegiao?`Região: ${e.subRegiao}`:null])}
     </div>
 
     <div class="report-page">
@@ -3227,9 +3327,9 @@ function gerarPptx(data){
   }
 
   let s = newSlide();
-  s.addText('SIPOLATTI · PRESTAÇÃO DE CONTAS', {x:0.6,y:2.6,w:12,h:0.4,fontSize:14,color:PPTX_COLORS.cyan,bold:true,charSpacing:2});
-  s.addText('Relatório Executivo', {x:0.6,y:3.0,w:12,h:1,fontSize:44,bold:true,color:PPTX_COLORS.text});
-  s.addText('Retorno Logístico', {x:0.6,y:3.9,w:12,h:0.5,fontSize:20,color:PPTX_COLORS.gold2,bold:true});
+  s.addText('SIPOLATTI', {x:0.6,y:2.5,w:12,h:0.6,fontSize:20,color:PPTX_COLORS.gold2,bold:true,charSpacing:4});
+  s.addText('PRESTAÇÃO DE CONTAS', {x:0.6,y:3.0,w:12,h:0.5,fontSize:15,color:PPTX_COLORS.cyan,bold:true,charSpacing:2.5});
+  s.addText('Retorno Logístico', {x:0.6,y:3.65,w:12,h:0.9,fontSize:36,bold:true,color:PPTX_COLORS.text});
   s.addText(`Período: ${periodoLabel(data.de,data.ate)}`, {x:0.6,y:4.6,w:12,h:0.4,fontSize:13,color:PPTX_COLORS.dim});
   s.addText(`Gerado em ${new Date().toLocaleString('pt-BR')}`, {x:0.6,y:5.0,w:12,h:0.4,fontSize:11,color:PPTX_COLORS.dim});
 
@@ -3276,15 +3376,15 @@ function gerarPptx(data){
   pptxAddRankingChart(s, data.rankLojaRetorno, 6.9, 1.7, 'Loja');
 
   s = newSlide();
+  s.addText('MOTIVOS — RETORNO', {x:0.6,y:0.4,w:11,h:0.4,fontSize:13,color:PPTX_COLORS.gold2,bold:true,charSpacing:1.5});
+  s.addText('Principais ocorrências', {x:0.6,y:0.75,w:11,h:0.6,fontSize:28,bold:true,color:PPTX_COLORS.text});
+  pptxAddSingleBarChart(s, data.motivosRetorno, PPTX_COLORS.gold);
+
+  s = newSlide();
   s.addText('PONTOS DE ATENÇÃO — FICOU NO BOX', {x:0.6,y:0.4,w:11,h:0.4,fontSize:13,color:PPTX_COLORS.gold2,bold:true,charSpacing:1.5});
   s.addText('Ranking do período', {x:0.6,y:0.75,w:11,h:0.6,fontSize:28,bold:true,color:PPTX_COLORS.text});
   pptxAddRankingChart(s, data.rankTranspBox, 0.6, 1.7, 'Transportadora');
   pptxAddRankingChart(s, data.rankMotoristaBox, 6.9, 1.7, 'Motorista');
-
-  s = newSlide();
-  s.addText('MOTIVOS — RETORNO', {x:0.6,y:0.4,w:11,h:0.4,fontSize:13,color:PPTX_COLORS.gold2,bold:true,charSpacing:1.5});
-  s.addText('Principais ocorrências', {x:0.6,y:0.75,w:11,h:0.6,fontSize:28,bold:true,color:PPTX_COLORS.text});
-  pptxAddSingleBarChart(s, data.motivosRetorno, PPTX_COLORS.gold);
 
   s = newSlide();
   s.addText('MOTIVOS — FICOU NO BOX', {x:0.6,y:0.4,w:11,h:0.4,fontSize:13,color:PPTX_COLORS.gold2,bold:true,charSpacing:1.5});
