@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <link rel="manifest" href="./manifest.json">
-<meta name="theme-color" content="#0f0f0f">
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('./sw.js');
-  });
-}
-</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIPOLATTI · Retorno Logístico</title>
@@ -437,6 +428,12 @@ tbody tr:hover{background:rgba(63,208,224,.05);}
     </div>
 
     <div class="chart-card" style="margin-bottom:20px;">
+      <h3>Comparativo mensal</h3>
+      <div class="desc">Total de retornos por mês — todo o histórico, independente do filtro de período acima</div>
+      <div class="chart-wrap tall"><canvas id="chart-comparativo-mensal"></canvas></div>
+    </div>
+
+    <div class="chart-card" style="margin-bottom:20px;">
       <h3>Retornos por Transportadora</h3>
       <div class="desc">Quantidade total de retornos registrados</div>
       <div class="chart-wrap tall"><canvas id="chart-transportadora"></canvas></div>
@@ -597,6 +594,12 @@ tbody tr:hover{background:rgba(63,208,224,.05);}
     </div>
 
     <div class="chart-card" style="margin-bottom:20px;">
+      <h3>Comparativo mensal</h3>
+      <div class="desc">Total de pedidos que ficaram no box por mês — todo o histórico, independente do filtro de período acima</div>
+      <div class="chart-wrap tall"><canvas id="chart-box-comparativo-mensal"></canvas></div>
+    </div>
+
+    <div class="chart-card" style="margin-bottom:20px;">
       <h3>Transportadora mais afetada</h3>
       <div class="desc">Quantidade de pedidos que ficaram no box, por transportadora</div>
       <div class="chart-wrap tall"><canvas id="chart-box-transportadora"></canvas></div>
@@ -745,7 +748,8 @@ const LS_KEYS = {
   motoristas:'rl_motoristas',
   regioes:'rl_regioes',
   motivos:'rl_motivos',
-  lojas:'rl_lojas'
+  lojas:'rl_lojas',
+  tombstones:'rl_catalog_tombstones'
 };
 
 const DEFAULT_MOTIVOS = [
@@ -778,6 +782,62 @@ let motoristas = loadArr(LS_KEYS.motoristas, []);
 let regioes = loadArr(LS_KEYS.regioes, DEFAULT_REGIOES);
 let motivosCat = loadArr(LS_KEYS.motivos, DEFAULT_MOTIVOS).filter(m=>m!=='Outros');
 let lojas = loadArr(LS_KEYS.lojas, []);
+
+// Registro de itens excluídos das listas de sugestão ("tombstones"), para que a
+// sincronização com o Google Drive não traga de volta um item que já foi excluído.
+function loadTombstones(){
+  try{
+    const raw = localStorage.getItem(LS_KEYS.tombstones);
+    const obj = raw ? JSON.parse(raw) : {};
+    return {
+      transportadora: Array.isArray(obj.transportadora) ? obj.transportadora : [],
+      motorista: Array.isArray(obj.motorista) ? obj.motorista : [],
+      regiao: Array.isArray(obj.regiao) ? obj.regiao : [],
+      loja: Array.isArray(obj.loja) ? obj.loja : [],
+      motivo: Array.isArray(obj.motivo) ? obj.motivo : []
+    };
+  }catch(e){
+    return {transportadora:[], motorista:[], regiao:[], loja:[], motivo:[]};
+  }
+}
+let catalogTombstones = loadTombstones();
+function saveTombstones(){ localStorage.setItem(LS_KEYS.tombstones, JSON.stringify(catalogTombstones)); }
+function addTombstone(field, value){
+  if(!catalogTombstones[field]) catalogTombstones[field] = [];
+  const norm = normalizeStr(value);
+  if(!catalogTombstones[field].some(v=>normalizeStr(v)===norm)){
+    catalogTombstones[field].push(value);
+    saveTombstones();
+  }
+}
+function removeTombstone(field, value){
+  if(!catalogTombstones[field] || catalogTombstones[field].length===0) return;
+  const norm = normalizeStr(value);
+  const filtered = catalogTombstones[field].filter(v=>normalizeStr(v)!==norm);
+  if(filtered.length !== catalogTombstones[field].length){
+    catalogTombstones[field] = filtered;
+    saveTombstones();
+  }
+}
+function isTombstoned(field, value){
+  return (catalogTombstones[field]||[]).some(v=>normalizeStr(v)===normalizeStr(value));
+}
+// Garante que um valor exista no catálogo (comparando sem diferenciar maiúsculas/acentos):
+// se já existir uma variação equivalente, reaproveita ela; caso contrário, adiciona o novo valor
+// (e remove de uma eventual lista de excluídos, já que é uma inclusão explícita).
+function ensureInCatalog(field, value){
+  const def = LIST_DEFS[field];
+  if(!def || !value) return value;
+  const arr = def.get();
+  const existing = arr.find(v => normalizeStr(v) === normalizeStr(value));
+  if(existing) return existing;
+  const newArr = arr.slice();
+  newArr.push(value);
+  def.set(newArr);
+  saveArr(def.lsKey, newArr);
+  removeTombstone(field, value);
+  return value;
+}
 
 function persistAll(){
   saveArr(LS_KEYS.records, records);
@@ -893,6 +953,19 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 ============================================================ */
 function fmtPct(n){ return (isFinite(n)?n:0).toFixed(1).replace('.',',') + '%'; }
 const PT_MONTHS_ABBR = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+function monthlyTotals(recs){
+  const byMonth = {};
+  recs.forEach(r=>{
+    if(!r.data || !/^\d{4}-\d{2}-\d{2}$/.test(r.data)) return;
+    const key = r.data.slice(0,7); // AAAA-MM
+    byMonth[key] = (byMonth[key]||0)+1;
+  });
+  return Object.keys(byMonth).sort().map(key=>{
+    const [y,m] = key.split('-');
+    const mi = parseInt(m,10)-1;
+    return { key, label: `${PT_MONTHS_ABBR[mi] || m}/${y}`, value: byMonth[key] };
+  });
+}
 function fmtDateBR(iso){
   if(!iso) return '-';
   const [y,m,d] = iso.split('-');
@@ -929,18 +1002,11 @@ function setupAddNewSelect(selectId, field, promptTitle, promptPlaceholder){
         onConfirm:(val)=>{
           val = (val||'').trim();
           if(!val) return;
-          const def = LIST_DEFS[field];
-          const arr = def.get();
-          if(!arr.includes(val)){
-            const newArr = arr.slice();
-            newArr.push(val);
-            def.set(newArr);
-            saveArr(def.lsKey, newArr);
-          }
+          const finalVal = ensureInCatalog(field, val);
           refreshDatalists();
-          document.getElementById(selectId).value = val;
+          document.getElementById(selectId).value = finalVal;
           if(typeof driveAutoSave === 'function') driveAutoSave();
-          toast('Adicionado à lista!');
+          toast(finalVal===val ? 'Adicionado à lista!' : `Já existia como "${finalVal}" — reaproveitado.`);
         }
       });
     }
@@ -1216,7 +1282,18 @@ if(CHARTS_OK){
 /* ============================================================
    DASHBOARD RENDER
 ============================================================ */
+let dashboardFiltroInicializado = false;
+function setPeriodoMesAtual(idDe, idAte){
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  document.getElementById(idDe).value = first.toISOString().slice(0,10);
+  document.getElementById(idAte).value = todayISO();
+}
 function renderDashboard(){
+  if(!dashboardFiltroInicializado){
+    dashboardFiltroInicializado = true;
+    setPeriodoMesAtual('flt-de','flt-ate');
+  }
   populateFilterSelects();
   const recs = getFilteredRecords();
 
@@ -1276,6 +1353,7 @@ function renderDashboard(){
   renderChartRegiao(byRegiao);
   renderChartMotorista(byMotorista);
   renderChartEvolucao(recs);
+  renderChartMensal('chart-comparativo-mensal', 'comparativoMensal', getReturnRecords(), '#e0b64f');
 }
 
 function renderChartTransportadora(byTransp){
@@ -1392,6 +1470,31 @@ function renderChartEvolucao(recs){
           color:'#eaeefb', font:{weight:'bold', size:11},
           formatter:(v)=> v
         }
+      },
+      layout:{padding:{top:34}},
+      scales:{
+        y:{ display:false, grid:{display:false}, suggestedMax: maxValor*1.25 },
+        x:{ grid:{display:false}, ticks:{font:{weight:'bold', size:11}, color:'#eaeefb'} }
+      } }
+  });
+}
+
+function renderChartMensal(canvasId, chartKey, recs, color){
+  if(!CHARTS_OK) return;
+  const entries = monthlyTotals(recs);
+  destroyChart(chartKey);
+  const ctx = document.getElementById(canvasId);
+  if(!ctx || entries.length===0) return;
+  const valores = entries.map(e=>e.value);
+  const maxValor = Math.max(...valores, 1);
+  charts[chartKey] = new Chart(ctx, {
+    type:'bar',
+    data:{ labels: entries.map(e=>e.label),
+      datasets:[{ label:'Total', data: valores, backgroundColor: color, borderRadius:6 }]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        datalabels:{ display:true, align:'top', anchor:'end', offset:8, color:'#eaeefb', font:{weight:'bold', size:11}, formatter:(v)=> v }
       },
       layout:{padding:{top:34}},
       scales:{
@@ -1567,7 +1670,12 @@ document.getElementById('btn-limpar-filtros-loja').addEventListener('click', ()=
   renderLojas();
 });
 
+let lojaFiltroInicializado = false;
 function renderLojas(){
+  if(!lojaFiltroInicializado){
+    lojaFiltroInicializado = true;
+    setPeriodoMesAtual('loja-flt-de','loja-flt-ate');
+  }
   populateLojaFilterSelect();
   const recsPeriodo = getFilteredRecordsLoja();
   const recs = recsPeriodo.filter(r=>r.loja); // só considera lançamentos com loja informada
@@ -1865,7 +1973,12 @@ function getFilteredRecordsBox(){
   });
 }
 
+let boxFiltroInicializado = false;
 function renderBox(){
+  if(!boxFiltroInicializado){
+    boxFiltroInicializado = true;
+    setPeriodoMesAtual('box-flt-de','box-flt-ate');
+  }
   populateBoxFilterSelects();
   const recs = getFilteredRecordsBox();
 
@@ -1913,6 +2026,7 @@ function renderBox(){
   `;
 
   renderChartBoxEvolucao(recs);
+  renderChartMensal('chart-box-comparativo-mensal', 'boxComparativoMensal', getBoxRecords(), '#f2a154');
   renderChartBoxTransportadora(byTransp);
   renderChartBoxMotorista(byMotorista);
   renderChartBoxLoja(byLoja, topLoja);
@@ -2232,7 +2346,9 @@ document.getElementById('btn-import-backup').addEventListener('change', function
         regioes = data.regioes || DEFAULT_REGIOES;
         motivosCat = data.motivosCat || DEFAULT_MOTIVOS;
         lojas = data.lojas || [];
+        catalogTombstones = data.catalogTombstones || {transportadora:[], motorista:[], regiao:[], loja:[], motivo:[]};
         persistAll();
+        saveTombstones();
         refreshDatalists();
         renderRegistros();
         toast('Backup restaurado com sucesso!');
@@ -2350,7 +2466,7 @@ function silentRefreshDriveToken(){
 }
 
 function buildBackupPayload(){
-  return JSON.stringify({records, transportadoras, motoristas, regioes, motivosCat, lojas, exportedAt:new Date().toISOString()});
+  return JSON.stringify({records, transportadoras, motoristas, regioes, motivosCat, lojas, catalogTombstones, exportedAt:new Date().toISOString()});
 }
 
 async function driveApiFetch(url, options={}, isRetry){
@@ -2466,12 +2582,14 @@ function aplicarDadosRemotos(remote){
   regioes = remote.regioes || DEFAULT_REGIOES;
   motivosCat = remote.motivosCat || DEFAULT_MOTIVOS;
   lojas = remote.lojas || [];
+  catalogTombstones = remote.catalogTombstones || {transportadora:[], motorista:[], regiao:[], loja:[], motivo:[]};
   saveArr(LS_KEYS.records, records);
   saveArr(LS_KEYS.transportadoras, transportadoras);
   saveArr(LS_KEYS.motoristas, motoristas);
   saveArr(LS_KEYS.regioes, regioes);
   saveArr(LS_KEYS.motivos, motivosCat);
   saveArr(LS_KEYS.lojas, lojas);
+  saveTombstones();
   refreshDatalists();
   renderRegistros();
   toast('Dados do Google Drive carregados!');
@@ -2502,6 +2620,22 @@ async function driveSaveNow(manual){
 function mergeUnique(remoteArr, localArr){
   return Array.from(new Set([...(remoteArr||[]), ...(localArr||[])]));
 }
+function filterTombstoned(field, arr){
+  return arr.filter(v => !isTombstoned(field, v));
+}
+function mergeTombstonesFromRemote(remote){
+  const remoteTomb = remote.catalogTombstones || {};
+  ['transportadora','motorista','regiao','loja','motivo'].forEach(field=>{
+    (remoteTomb[field]||[]).forEach(value=>{
+      if(!catalogTombstones[field]) catalogTombstones[field] = [];
+      const norm = normalizeStr(value);
+      if(!catalogTombstones[field].some(v=>normalizeStr(v)===norm)){
+        catalogTombstones[field].push(value);
+      }
+    });
+  });
+  saveTombstones();
+}
 
 function mergeRemoteData(remote){
   const remoteRecords = remote.records || [];
@@ -2520,13 +2654,15 @@ function mergeRemoteData(remote){
     mergedMap.set(id, localTime >= remoteTime ? localRec : remoteRec);
   });
 
+  mergeTombstonesFromRemote(remote);
+
   return {
     records: [...mergedMap.values()],
-    transportadoras: mergeUnique(remote.transportadoras, transportadoras),
-    motoristas: mergeUnique(remote.motoristas, motoristas),
-    regioes: mergeUnique(remote.regioes, regioes),
-    motivosCat: mergeUnique(remote.motivosCat, motivosCat),
-    lojas: mergeUnique(remote.lojas, lojas)
+    transportadoras: filterTombstoned('transportadora', mergeUnique(remote.transportadoras, transportadoras)),
+    motoristas: filterTombstoned('motorista', mergeUnique(remote.motoristas, motoristas)),
+    regioes: filterTombstoned('regiao', mergeUnique(remote.regioes, regioes)),
+    motivosCat: filterTombstoned('motivo', mergeUnique(remote.motivosCat, motivosCat)),
+    lojas: filterTombstoned('loja', mergeUnique(remote.lojas, lojas))
   };
 }
 
@@ -2603,13 +2739,16 @@ function renameListItem(field, oldValue, newValue){
   const idx = arr.indexOf(oldValue);
   if(idx===-1) return 0;
   const newArr = arr.slice();
-  if(newArr.includes(newValue)){
-    newArr.splice(idx,1); // já existe um item igual ao novo valor: só remove o antigo (mescla)
+  const existingMatch = newArr.find((v,i) => i!==idx && normalizeStr(v)===normalizeStr(newValue));
+  if(existingMatch){
+    newArr.splice(idx,1); // já existe um item equivalente (ignorando maiúsculas/acentos): só remove o antigo (mescla)
+    newValue = existingMatch; // reaproveita a grafia já cadastrada
   } else {
     newArr[idx] = newValue;
   }
   def.set(newArr);
   saveArr(def.lsKey, newArr);
+  removeTombstone(field, newValue);
 
   let updated = 0;
   records.forEach(r=>{
@@ -2671,6 +2810,7 @@ function showManageListModal(field){
         newArr.splice(idx,1);
         def.set(newArr);
         saveArr(def.lsKey, newArr);
+        addTombstone(field, itemName);
         if(typeof driveAutoSave === 'function') driveAutoSave();
         refreshDatalists();
         if(field==='motivo'){
@@ -2722,12 +2862,54 @@ function showManageListModal(field){
   renderList();
 
   const actionsEl = document.getElementById('modal-actions');
-  actionsEl.innerHTML='';
-  const btnClose = document.createElement('button');
-  btnClose.className = 'btn btn-ghost';
-  btnClose.textContent = 'Fechar';
-  btnClose.onclick = ()=>{ closeModal(); msgEl.innerHTML=''; };
-  actionsEl.appendChild(btnClose);
+  function renderActions(){
+    actionsEl.innerHTML = '';
+    const btnClearAll = document.createElement('button');
+    btnClearAll.className = 'btn btn-danger';
+    btnClearAll.textContent = 'Limpar tudo';
+    btnClearAll.onclick = ()=>{
+      if(def.get().length===0){ toast('A lista já está vazia.'); return; }
+      renderConfirmClear();
+    };
+    const btnClose = document.createElement('button');
+    btnClose.className = 'btn btn-ghost';
+    btnClose.textContent = 'Fechar';
+    btnClose.onclick = ()=>{ closeModal(); msgEl.innerHTML=''; };
+    actionsEl.appendChild(btnClearAll);
+    actionsEl.appendChild(btnClose);
+  }
+  function renderConfirmClear(){
+    actionsEl.innerHTML = '';
+    const warn = document.createElement('span');
+    warn.textContent = 'Confirma limpar tudo?';
+    warn.style.cssText = 'color:var(--bad);font-size:12.5px;font-weight:700;align-self:center;margin-right:auto;';
+    const btnYes = document.createElement('button');
+    btnYes.className = 'btn btn-danger';
+    btnYes.textContent = 'Sim, limpar tudo';
+    btnYes.onclick = ()=>{
+      const arrNow = def.get();
+      arrNow.forEach(item => addTombstone(field, item));
+      def.set([]);
+      saveArr(def.lsKey, []);
+      if(typeof driveAutoSave === 'function') driveAutoSave();
+      refreshDatalists();
+      if(field==='motivo'){
+        buildMotivoUnicoOptions(document.getElementById('f-motivo-unico').value);
+      }
+      toast('Lista limpa com sucesso.');
+      editingIdx = null;
+      renderList();
+      renderActions();
+    };
+    const btnNo = document.createElement('button');
+    btnNo.className = 'btn btn-ghost';
+    btnNo.textContent = 'Cancelar';
+    btnNo.onclick = ()=> renderActions();
+    actionsEl.appendChild(warn);
+    actionsEl.appendChild(btnYes);
+    actionsEl.appendChild(btnNo);
+  }
+  renderActions();
   document.getElementById('modal-overlay').classList.add('active');
 }
 
@@ -2790,15 +2972,25 @@ function mapHeaders(headerRow){
 
 const PT_MONTHS = {jan:1,fev:2,mar:3,abr:4,mai:5,jun:6,jul:7,ago:8,set:9,out:10,nov:11,dez:12};
 
+function isValidISODate(iso){
+  const mtc = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!mtc) return false;
+  const y = parseInt(mtc[1],10), mo = parseInt(mtc[2],10), d = parseInt(mtc[3],10);
+  if(mo<1 || mo>12 || d<1 || d>31) return false;
+  const dt = new Date(y, mo-1, d);
+  return dt.getFullYear()===y && dt.getMonth()===mo-1 && dt.getDate()===d;
+}
+
 function parseDateFlexible(str){
   if(!str) return '';
   str = String(str).trim();
-  if(/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(str)) return isValidISODate(str) ? str : '';
   const m = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if(m){
     let [_, d, mo, y] = m;
     if(y.length===2) y = '20'+y;
-    return `${y.padStart(4,'0')}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    const iso = `${y.padStart(4,'0')}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    return isValidISODate(iso) ? iso : '';
   }
   // Formato dia-mês abreviado em português (ex: "31-ago", "31/ago/2026", "5 set 26")
   const m2 = str.match(/^(\d{1,2})[\/\-\s]([a-zçãéêô]{3,})\.?(?:[\/\-\s](\d{2,4}))?$/i);
@@ -2809,7 +3001,8 @@ function parseDateFlexible(str){
     if(month && day>=1 && day<=31){
       let year = m2[3] ? parseInt(m2[3],10) : new Date().getFullYear();
       if(m2[3] && m2[3].length===2) year = 2000+year;
-      return `${String(year).padStart(4,'0')}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      const iso = `${String(year).padStart(4,'0')}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      return isValidISODate(iso) ? iso : '';
     }
   }
   if(/^\d+(\.\d+)?$/.test(str)){
@@ -2880,20 +3073,22 @@ function importRowsAsRecords(rows){
     const obs = get('obs');
     const pedido = get('pedido');
 
-    const candidateKey = recordDedupeKey({data:dataISO, pedido, transportadora, motorista, regiao, loja, box, tipo, motivos:[{motivo}]});
+    // Reaproveita a grafia já cadastrada quando o valor já existir (ignorando maiúsculas/acentos),
+    // evitando criar "Anchieta" e "ANCHIETA" como itens diferentes.
+    const transportadoraFinal = ensureInCatalog('transportadora', transportadora);
+    const motoristaFinal = ensureInCatalog('motorista', motorista);
+    const regiaoFinal = ensureInCatalog('regiao', regiao);
+    const lojaFinal = loja ? ensureInCatalog('loja', loja) : '';
+    const motivoFinal = ensureInCatalog('motivo', motivo);
+
+    const candidateKey = recordDedupeKey({data:dataISO, pedido, transportadora:transportadoraFinal, motorista:motoristaFinal, regiao:regiaoFinal, loja:lojaFinal, box, tipo, motivos:[{motivo:motivoFinal}]});
     if(existingKeys.has(candidateKey)){ duplicated++; continue; }
     existingKeys.add(candidateKey);
 
-    if(!transportadoras.includes(transportadora)) transportadoras.push(transportadora);
-    if(!motoristas.includes(motorista)) motoristas.push(motorista);
-    if(!regioes.includes(regiao)) regioes.push(regiao);
-    if(loja && !lojas.includes(loja)) lojas.push(loja);
-    if(motivo && !motivosCat.includes(motivo)) motivosCat.push(motivo);
-
     records.push({
-      id: uid(), data: dataISO, pedido, transportadora, motorista, regiao, loja,
+      id: uid(), data: dataISO, pedido, transportadora:transportadoraFinal, motorista:motoristaFinal, regiao:regiaoFinal, loja:lojaFinal,
       tipo, box: tipo==='box' ? box : '',
-      retornos: 1, motivos: [{motivo, qtd:1}], obs,
+      retornos: 1, motivos: [{motivo:motivoFinal, qtd:1}], obs,
       anexo: null, createdAt: Date.now(), updatedAt: Date.now()
     });
     added++;
@@ -3007,13 +3202,13 @@ function topLabelFor(recs, field){
   const map = aggregateBy(recs, r=>r[field] || '—');
   let best=null, bestVal=-1;
   Object.entries(map).forEach(([k,v])=>{ if(v.retornos>bestVal){ bestVal=v.retornos; best=k; } });
-  return bestVal>0 ? best : null;
+  return bestVal>0 ? {label:best, value:bestVal} : null;
 }
 function topMotivoFor(recs){
   const counts = motivoCounts(recs);
   let best=null, bestVal=-1;
   Object.entries(counts).forEach(([k,v])=>{ if(v>bestVal){ bestVal=v; best=k; } });
-  return bestVal>0 ? best : null;
+  return bestVal>0 ? {label:best, value:bestVal} : null;
 }
 function topEntries(recs, field, limit, subFields){
   const groups = {};
@@ -3124,11 +3319,10 @@ function buildReportData(de, ate){
 
   const totalRetorno = retorno.length;
   const totalBox = box.length;
-  let dias;
-  if(de && ate){ dias = Math.round((new Date(ate)-new Date(de))/86400000)+1; }
-  else { dias = new Set([...retorno,...box].map(r=>r.data)).size || 1; }
-  const mediaRetorno = dias ? totalRetorno/dias : 0;
-  const mediaBox = dias ? totalBox/dias : 0;
+  const diasRetorno = new Set(retorno.map(r=>r.data)).size || 1;
+  const diasBox = new Set(box.map(r=>r.data)).size || 1;
+  const mediaRetorno = totalRetorno ? totalRetorno/diasRetorno : 0;
+  const mediaBox = totalBox ? totalBox/diasBox : 0;
 
   const rankTranspRetorno = topEntries(retorno,'transportadora',5,['regiao','motivo']);
   const rankMotoristaRetorno = topEntries(retorno,'motorista',5,['regiao','motivo']);
@@ -3143,6 +3337,8 @@ function buildReportData(de, ate){
   const motivosBox = topMotivos(box,5,true);
 
   const evolRetorno = bucketEvolution(buildEvolutionSeries(retorno));
+  const mensalRetorno = monthlyTotals(getReturnRecords());
+  const mensalBox = monthlyTotals(getBoxRecords());
 
   let variacao = null;
   if(de && ate){
@@ -3154,15 +3350,18 @@ function buildReportData(de, ate){
   }
 
   const data = {
-    de, ate, totalRetorno, totalBox, dias, mediaRetorno, mediaBox,
+    de, ate, totalRetorno, totalBox, diasRetorno, diasBox, mediaRetorno, mediaBox,
     rankTranspRetorno, rankMotoristaRetorno, rankRegiaoRetorno, rankLojaRetorno,
     rankTranspBox, rankMotoristaBox, rankLojaBox,
-    motivosRetorno, motivosBox, evolRetorno, variacao
+    motivosRetorno, motivosBox, evolRetorno, mensalRetorno, mensalBox, variacao
   };
   data.insights = generateInsights(data);
   return data;
 }
 
+function subFmt(sub){
+  return sub ? `${sub.label} (${sub.value})` : null;
+}
 function reportBarsHTML(entries, subLines){
   if(!entries || !entries.length) return `<div style="color:var(--text-dim);font-size:13px;">Sem dados no período.</div>`;
   const max = Math.max(...entries.map(e=>e.value), 1);
@@ -3204,7 +3403,12 @@ document.querySelectorAll('.rel-quick').forEach(btn=>{
 document.getElementById('rel-de').addEventListener('change', renderReportPreview);
 document.getElementById('rel-ate').addEventListener('change', renderReportPreview);
 
+let relatorioFiltroInicializado = false;
 function renderReportPreview(){
+  if(!relatorioFiltroInicializado){
+    relatorioFiltroInicializado = true;
+    setPeriodoMesAtual('rel-de','rel-ate');
+  }
   const {de, ate} = getReportPeriodo();
   const data = buildReportData(de, ate);
   window.__lastReportData = data;
@@ -3245,39 +3449,48 @@ function renderReportPreview(){
       <div class="report-kicker">PONTOS DE ATENÇÃO — RETORNO</div>
       <div class="report-title">Ranking do período</div>
       <div class="grid grid-2">
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspRetorno, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaRetorno, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Região</h4>${reportBarsHTML(data.rankRegiaoRetorno, e=>[e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaRetorno, e=>[e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspRetorno, e=>[e.subRegiao?`Região: ${subFmt(e.subRegiao)}`:null, e.subMotivo?`Motivo: ${subFmt(e.subMotivo)}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaRetorno, e=>[e.subRegiao?`Região: ${subFmt(e.subRegiao)}`:null, e.subMotivo?`Motivo: ${subFmt(e.subMotivo)}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Região</h4>${reportBarsHTML(data.rankRegiaoRetorno, e=>[e.subMotivo?`Motivo: ${subFmt(e.subMotivo)}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaRetorno, e=>[e.subMotivo?`Motivo: ${subFmt(e.subMotivo)}`:null])}</div>
       </div>
     </div>
 
     <div class="report-page">
       <div class="report-kicker">MOTIVOS — RETORNO</div>
       <div class="report-title">Principais ocorrências</div>
-      ${reportBarsHTML(data.motivosRetorno, e=>[e.subLoja?`Loja: ${e.subLoja}`:null, e.subRegiao?`Região: ${e.subRegiao}`:null])}
+      ${reportBarsHTML(data.motivosRetorno, e=>[e.subLoja?`Loja: ${subFmt(e.subLoja)}`:null, e.subRegiao?`Região: ${subFmt(e.subRegiao)}`:null])}
     </div>
 
     <div class="report-page">
       <div class="report-kicker">PONTOS DE ATENÇÃO — FICOU NO BOX</div>
       <div class="report-title">Ranking do período</div>
       <div class="grid grid-2">
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspBox, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaBox, e=>[e.subRegiao?`Região: ${e.subRegiao}`:null, e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
-        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaBox, e=>[e.subMotivo?`Motivo: ${e.subMotivo}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Transportadora</h4>${reportBarsHTML(data.rankTranspBox, e=>[e.subRegiao?`Região: ${subFmt(e.subRegiao)}`:null, e.subMotivo?`Motivo: ${subFmt(e.subMotivo)}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Motorista</h4>${reportBarsHTML(data.rankMotoristaBox, e=>[e.subRegiao?`Região: ${subFmt(e.subRegiao)}`:null, e.subMotivo?`Motivo: ${subFmt(e.subMotivo)}`:null])}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Loja</h4>${reportBarsHTML(data.rankLojaBox, e=>[e.subMotivo?`Motivo: ${subFmt(e.subMotivo)}`:null])}</div>
       </div>
     </div>
 
     <div class="report-page">
       <div class="report-kicker">MOTIVOS — FICOU NO BOX</div>
       <div class="report-title">Principais ocorrências</div>
-      ${reportBarsHTML(data.motivosBox, e=>[e.subLoja?`Loja: ${e.subLoja}`:null, e.subRegiao?`Região: ${e.subRegiao}`:null])}
+      ${reportBarsHTML(data.motivosBox, e=>[e.subLoja?`Loja: ${subFmt(e.subLoja)}`:null, e.subRegiao?`Região: ${subFmt(e.subRegiao)}`:null])}
     </div>
 
     <div class="report-page">
       <div class="report-kicker">EVOLUÇÃO NO PERÍODO</div>
       <div class="report-title">Retornos ao longo do tempo</div>
       ${reportBarsHTML(data.evolRetorno)}
+    </div>
+
+    <div class="report-page">
+      <div class="report-kicker">COMPARATIVO MENSAL</div>
+      <div class="report-title">Volume por mês — todo o histórico</div>
+      <div class="grid grid-2">
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Retorno</h4>${reportBarsHTML(data.mensalRetorno)}</div>
+        <div><h4 style="color:var(--text);font-size:13.5px;margin:0 0 10px;">Ficou no Box</h4>${reportBarsHTML(data.mensalBox)}</div>
+      </div>
     </div>
 
     <div class="report-page">
@@ -3411,6 +3624,12 @@ function gerarPptx(data){
   } else {
     s.addText('Sem dados suficientes no período.', {x:0.6,y:2.5,w:11,h:0.6,fontSize:16,color:PPTX_COLORS.dim});
   }
+
+  s = newSlide();
+  s.addText('COMPARATIVO MENSAL', {x:0.6,y:0.4,w:11,h:0.4,fontSize:13,color:PPTX_COLORS.gold2,bold:true,charSpacing:1.5});
+  s.addText('Volume por mês — todo o histórico', {x:0.6,y:0.75,w:11,h:0.6,fontSize:28,bold:true,color:PPTX_COLORS.text});
+  pptxAddRankingChart(s, data.mensalRetorno, 0.6, 1.7, 'Retorno');
+  pptxAddRankingChart(s, data.mensalBox, 6.9, 1.7, 'Ficou no Box');
 
   s = newSlide();
   s.addText('CONCLUSÃO', {x:0.6,y:0.4,w:11,h:0.4,fontSize:13,color:PPTX_COLORS.gold2,bold:true,charSpacing:1.5});
