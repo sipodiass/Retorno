@@ -2626,7 +2626,12 @@ function filterTombstoned(field, arr){
 function mergeTombstonesFromRemote(remote){
   const remoteTomb = remote.catalogTombstones || {};
   ['transportadora','motorista','regiao','loja','motivo'].forEach(field=>{
+    const localArr = LIST_DEFS[field].get(); // valores atuais deste dispositivo
     (remoteTomb[field]||[]).forEach(value=>{
+      // Se o valor está presente localmente agora (foi reincluído via importação ou "+ Adicionar novo"),
+      // uma exclusão antiga vinda de outro dispositivo/sessão não deve apagar de novo.
+      const presenteLocalmente = localArr.some(v=>normalizeStr(v)===normalizeStr(value));
+      if(presenteLocalmente) return;
       if(!catalogTombstones[field]) catalogTombstones[field] = [];
       const norm = normalizeStr(value);
       if(!catalogTombstones[field].some(v=>normalizeStr(v)===norm)){
