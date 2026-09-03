@@ -290,8 +290,20 @@ tbody tr:hover{background:rgba(63,208,224,.05);}
   .view{display:none !important;}
   #view-relatorio{display:block !important;}
   body,.container{background:var(--bg-0) !important;padding:0 !important;max-width:100% !important;}
-  .report-page{page-break-after:always;border-radius:0;margin:0 0 0;padding:26px 22px;min-height:0;}
-  .report-page:last-child{page-break-after:auto;}
+  .report-page{
+    border-radius:0;
+    margin:0 0 14px;
+    padding:20px 20px;
+    min-height:0;
+    page-break-inside:avoid; break-inside:avoid;
+  }
+  /* A capa fica isolada, como uma folha de rosto — o restante flui naturalmente,
+     sem forçar uma página em branco por seção. */
+  .report-page:first-child{ page-break-after:always; break-after:page; margin-bottom:0; }
+  .report-title{ margin:0 0 14px; }
+  .report-page .grid > div{ page-break-inside:avoid; break-inside:avoid; }
+  .report-bar-row{ page-break-inside:avoid; break-inside:avoid; }
+  .report-insight{ page-break-inside:avoid; break-inside:avoid; }
   *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}
 }
 </style>
@@ -1446,20 +1458,15 @@ function renderChartMotorista(byMotorista){
 }
 function renderChartEvolucao(recs){
   if(!CHARTS_OK) return;
-  const byDate = {};
-  recs.forEach(r=>{
-    if(!byDate[r.data]) byDate[r.data]=0;
-    byDate[r.data] += r.retornos;
-  });
-  const dates = Object.keys(byDate).sort();
+  const entries = bucketEvolution(buildEvolutionSeries(recs));
   destroyChart('evolucao');
   const ctx = document.getElementById('chart-evolucao');
-  if(dates.length===0) return;
-  const valores = dates.map(d=>byDate[d]);
+  if(entries.length===0) return;
+  const valores = entries.map(e=>e.value);
   const maxValor = Math.max(...valores, 1);
   charts.evolucao = new Chart(ctx, {
     type:'line',
-    data:{ labels: dates.map(fmtDateBR),
+    data:{ labels: entries.map(e=>e.label),
       datasets:[{ label:'Retornos', data: valores,
         borderColor:'#e0b64f', backgroundColor:'rgba(224,182,79,.15)', fill:true, tension:.3, pointBackgroundColor:'#e0b64f' }]},
     options:{ responsive:true, maintainAspectRatio:false,
@@ -2035,17 +2042,15 @@ function renderBox(){
 
 function renderChartBoxEvolucao(recs){
   if(!CHARTS_OK) return;
-  const byDate = {};
-  recs.forEach(r=>{ if(!byDate[r.data]) byDate[r.data]=0; byDate[r.data] += r.retornos; });
-  const dates = Object.keys(byDate).sort();
+  const entries = bucketEvolution(buildEvolutionSeries(recs));
   destroyChart('boxEvolucao');
   const ctx = document.getElementById('chart-box-evolucao');
-  if(dates.length===0) return;
-  const valores = dates.map(d=>byDate[d]);
+  if(entries.length===0) return;
+  const valores = entries.map(e=>e.value);
   const maxValor = Math.max(...valores, 1);
   charts.boxEvolucao = new Chart(ctx, {
     type:'line',
-    data:{ labels: dates.map(fmtDateBR),
+    data:{ labels: entries.map(e=>e.label),
       datasets:[{ label:'Ficou no box', data: valores,
         borderColor:'#f2a154', backgroundColor:'rgba(242,161,84,.15)', fill:true, tension:.3, pointBackgroundColor:'#f2a154' }]},
     options:{ responsive:true, maintainAspectRatio:false,
